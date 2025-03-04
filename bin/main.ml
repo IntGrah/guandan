@@ -1,0 +1,7 @@
+let () = Card.tests ()
+let () = Joker.tests ()
+let () = Rank.tests ()
+let () = Rankj.tests ()
+let () = Score.tests ()
+let () = Suit.tests ()
+let () = Stdio.print_endline @@ Game.show (Game.new_game ())
