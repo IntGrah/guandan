@@ -1,55 +1,23 @@
 open Base
 
-module Player = struct
-  type t = P1 | P2 | P3 | P4 [@@deriving show, eq]
-
-  let next : t -> t = function P1 -> P2 | P2 -> P3 | P3 -> P4 | P4 -> P1
-  let teammate (p : t) : t = next (next p)
-end
-
-module Store = struct
-  type 'a t = { p1 : 'a; p2 : 'a; p3 : 'a; p4 : 'a } [@@deriving show]
-
-  let get (p : Player.t) (store : 'a t) : 'a =
-    match p with
-    | P1 -> store.p1
-    | P2 -> store.p2
-    | P3 -> store.p3
-    | P4 -> store.p4
-
-  let set (p : Player.t) (v : 'a) (store : 'a t) : 'a t =
-    match p with
-    | P1 -> { store with p1 = v }
-    | P2 -> { store with p2 = v }
-    | P3 -> { store with p3 = v }
-    | P4 -> { store with p4 = v }
-
-  let find (v : 'a) { p1 = v1; p2 = v2; p3 = v3; p4 = v4 } ~equal : Player.t =
-    if equal v v1 then P1
-    else if equal v v2 then P2
-    else if equal v v3 then P3
-    else if equal v v4 then P4
-    else failwith "Not found"
-
-  let for_all { p1 = v1; p2 = v2; p3 = v3; p4 = v4 } ~f =
-    f v1 && f v2 && f v3 && f v4
-end
-
 module Position = struct
   type t = Big_master | Small_master | Small_slave | Big_slave
   [@@deriving show, eq]
 
-  let who_is (pos : t) (store : t Store.t) = Store.find pos store ~equal
+  let who_is (pos : t) (store : t Player.store) = Player.find pos store ~equal
 end
 
-type t = Active of Card.t list Store.t * levels * phase | Done
+type t = Active of Card.t list Player.store * levels * phase | Done
 [@@deriving show]
 
 and levels = { level : Rank.t; level_13 : Rank.t; level_24 : Rank.t }
 [@@deriving show]
 
 and phase =
-  | Trading of Position.t Store.t * bool Store.t
+  | Trading of {
+      position : Position.t Player.store;
+      traded : bool Player.store;
+    }
   | Playing of { turn : Player.t; current : current }
 [@@deriving show]
 
@@ -75,11 +43,11 @@ let new_game () : t =
   in
 
   match List.chunks_of ~length:27 deck with
-  | [ h1; h2; h3; h4 ] ->
+  | [ ha; hb; hc; hd ] ->
       Active
-        ( { p1 = h1; p2 = h2; p3 = h3; p4 = h4 },
+        ( { a = ha; b = hb; c = hc; d = hd },
           { level = Two; level_13 = Two; level_24 = Two },
-          Playing { turn = P1; current = Lead } )
+          Playing { turn = A; current = Lead } )
   | _ -> failwith "Should have 108 cards"
 
 let rec subtract (xs : 'a list) (ys : 'a list) ~equal : 'a list option =
@@ -95,24 +63,25 @@ let rec subtract (xs : 'a list) (ys : 'a list) ~equal : 'a list option =
   | xs, y :: ys ->
       sub xs y |> Option.value ~default:xs |> Fn.flip subtract ys ~equal
 
-let transition (player : Player.t) (state : t) (msg : message) :
+let transition (state : t) (player : Player.t) (msg : message) :
     (t * action, _) Result.t =
   let ( - ) = subtract ~equal:Card.equal in
   match state with
   | Done -> Error `Wrong_phase
   | Active (hands, levels, phase) -> (
       match phase with
-      | Trading (pos, traded) -> (
+      | Trading { position; traded } -> (
           let phase =
-            let traded = Store.set player true traded in
-            if Store.for_all traded ~f:Fn.id then
-              Playing { turn = Position.who_is Big_slave pos; current = Lead }
-            else Trading (pos, traded)
+            let traded = Player.set player true traded in
+            if Player.for_all traded ~f:Fn.id then
+              Playing
+                { turn = Position.who_is Big_slave position; current = Lead }
+            else Trading { position; traded }
           in
 
-          match (msg, Store.get player pos) with
+          match (msg, Player.get player position) with
           | Play _, _ | Pass, _ -> Error `Wrong_phase
-          | (Trade1 _, _ | Trade2 _, _) when Store.get player traded ->
+          | (Trade1 _, _ | Trade2 _, _) when Player.get player traded ->
               Error `Already_traded
           | Trade1 _, Big_master
           | Trade1 _, Big_slave
@@ -122,58 +91,58 @@ let transition (player : Player.t) (state : t) (msg : message) :
           | Revolt, Small_master ->
               Error `Wrong_position
           | Trade1 c, Small_master -> (
-              let hand = Store.get player hands in
-              let small_slave = Position.who_is Small_slave pos in
-              let hand_small_slave = Store.get small_slave hands in
+              let hand = Player.get player hands in
+              let small_slave = Position.who_is Small_slave position in
+              let hand_small_slave = Player.get small_slave hands in
               match hand - [ c ] with
               | None -> Error `Not_enough_cards
               | Some hand' ->
                   Ok
                     ( Active
-                        ( hands |> Store.set player hand'
-                          |> Store.set small_slave (c :: hand_small_slave),
+                        ( hands |> Player.set player hand'
+                          |> Player.set small_slave (c :: hand_small_slave),
                           levels,
                           phase ),
                       Broadcast "Small master gave to small slave" ))
           | Trade1 c, Small_slave -> (
-              let hand = Store.get player hands in
-              let small_master = Position.who_is Small_master pos in
-              let hand_small_master = Store.get small_master hands in
+              let hand = Player.get player hands in
+              let small_master = Position.who_is Small_master position in
+              let hand_small_master = Player.get small_master hands in
               match hand - [ c ] with
               | None -> Error `Not_enough_cards
               | Some hand' ->
                   Ok
                     ( Active
-                        ( hands |> Store.set player hand'
-                          |> Store.set small_master (c :: hand_small_master),
+                        ( hands |> Player.set player hand'
+                          |> Player.set small_master (c :: hand_small_master),
                           levels,
                           phase ),
                       Broadcast "Small slave gave to small master" ))
-          | Trade2 (c0, c1), Big_master -> (
-              let hand = Store.get player hands in
-              let big_slave = Position.who_is Big_slave pos in
-              let hand_big_slave = Store.get big_slave hands in
-              match hand - [ c0; c1 ] with
+          | Trade2 (c, c'), Big_master -> (
+              let hand = Player.get player hands in
+              let big_slave = Position.who_is Big_slave position in
+              let hand_big_slave = Player.get big_slave hands in
+              match hand - [ c; c' ] with
               | None -> Error `Not_enough_cards
               | Some hand' ->
                   Ok
                     ( Active
-                        ( hands |> Store.set player hand'
-                          |> Store.set big_slave (c0 :: c1 :: hand_big_slave),
+                        ( hands |> Player.set player hand'
+                          |> Player.set big_slave (c :: c' :: hand_big_slave),
                           levels,
                           phase ),
                       Broadcast "Small master gave to small slave" ))
-          | Trade2 (c0, c1), Big_slave -> (
-              let hand = Store.get player hands in
-              let big_master = Position.who_is Big_master pos in
-              let hand_big_master = Store.get big_master hands in
-              match hand - [ c0; c1 ] with
+          | Trade2 (c, c'), Big_slave -> (
+              let hand = Player.get player hands in
+              let big_master = Position.who_is Big_master position in
+              let hand_big_master = Player.get big_master hands in
+              match hand - [ c; c' ] with
               | None -> Error `Not_enough_cards
               | Some hand' ->
                   Ok
                     ( Active
-                        ( hands |> Store.set player hand'
-                          |> Store.set big_master (c0 :: c1 :: hand_big_master),
+                        ( hands |> Player.set player hand'
+                          |> Player.set big_master (c :: c' :: hand_big_master),
                           levels,
                           phase ),
                       Broadcast "Small slave gave to small master" ))
@@ -196,7 +165,7 @@ let transition (player : Player.t) (state : t) (msg : message) :
             when not (Score.lt_at levels.level sc' sc) ->
               Error `Doesn't_beat
           | Play (sc, cs), Resp (_, _) | Play (sc, cs), Lead -> (
-              let hand = Store.get player hands in
+              let hand = Player.get player hands in
               match hand - cs with
               | None -> Error `Not_enough_cards
               | Some hand ->
@@ -206,7 +175,7 @@ let transition (player : Player.t) (state : t) (msg : message) :
                       { turn = Player.next turn; current = Resp (player, sc) }
                   in
                   Ok
-                    ( Active (Store.set player hand hands, levels, phase),
+                    ( Active (Player.set player hand hands, levels, phase),
                       Broadcast "Player played" ))))
 
 let tests () =
