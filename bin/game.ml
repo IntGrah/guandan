@@ -31,7 +31,16 @@ type message =
   | Pass
 [@@deriving show]
 
-type action = None | Broadcast of string | PrivateMessage of Player.t * string
+type action =
+  | None
+  | Broadcast of broadcast
+  | PrivateMessage of Player.t * string
+[@@deriving show]
+
+and broadcast =
+  | Passed of Player.t
+  | Played of Player.t * Score.t
+  | Trade of Player.t * Player.t * Card.t list
 [@@deriving show]
 
 let new_game () : t =
@@ -103,7 +112,7 @@ let transition (state : t) (player : Player.t) (msg : message) :
                           |> Player.set small_slave (c :: hand_small_slave),
                           levels,
                           phase ),
-                      Broadcast "Small master gave to small slave" ))
+                      Broadcast (Trade (player, small_slave, [ c ])) ))
           | Trade1 c, Small_slave -> (
               let hand = Player.get player hands in
               let small_master = Position.who_is Small_master position in
@@ -117,7 +126,7 @@ let transition (state : t) (player : Player.t) (msg : message) :
                           |> Player.set small_master (c :: hand_small_master),
                           levels,
                           phase ),
-                      Broadcast "Small slave gave to small master" ))
+                      Broadcast (Trade (player, small_master, [ c ])) ))
           | Trade2 (c, c'), Big_master -> (
               let hand = Player.get player hands in
               let big_slave = Position.who_is Big_slave position in
@@ -131,7 +140,7 @@ let transition (state : t) (player : Player.t) (msg : message) :
                           |> Player.set big_slave (c :: c' :: hand_big_slave),
                           levels,
                           phase ),
-                      Broadcast "Small master gave to small slave" ))
+                      Broadcast (Trade (player, big_slave, [ c; c' ])) ))
           | Trade2 (c, c'), Big_slave -> (
               let hand = Player.get player hands in
               let big_master = Position.who_is Big_master position in
@@ -145,7 +154,7 @@ let transition (state : t) (player : Player.t) (msg : message) :
                           |> Player.set big_master (c :: c' :: hand_big_master),
                           levels,
                           phase ),
-                      Broadcast "Small slave gave to small master" ))
+                      Broadcast (Trade (player, big_master, [ c; c' ])) ))
           | Revolt, _ -> Error `Wrong_position (* TODO: implement revolution *))
       | Playing { turn; current } -> (
           match (msg, current) with
@@ -159,7 +168,7 @@ let transition (state : t) (player : Player.t) (msg : message) :
               in
               (* TODO: implement follower of leader *)
               let phase = Playing { turn = Player.next turn; current } in
-              Ok (Active (hands, levels, phase), Broadcast "Player passed")
+              Ok (Active (hands, levels, phase), Broadcast (Passed player))
           | Play (sc, cs), _ when not (Score.verify sc cs) -> Error `Wrong_score
           | Play (sc, _), Resp (_, sc')
             when not (Score.lt_at levels.level sc' sc) ->
@@ -176,7 +185,7 @@ let transition (state : t) (player : Player.t) (msg : message) :
                   in
                   Ok
                     ( Active (Player.set player hand hands, levels, phase),
-                      Broadcast "Player played" ))))
+                      Broadcast (Played (player, sc)) ))))
 
 let tests () =
   let ( = ) = Option.equal (List.equal equal) in
