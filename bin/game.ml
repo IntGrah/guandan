@@ -1,12 +1,5 @@
 open Base
 
-module Position = struct
-  type t = Big_master | Small_master | Small_slave | Big_slave
-  [@@deriving show, eq]
-
-  let who_is (pos : t) (store : t Player.store) = Player.find pos store ~equal
-end
-
 type t = Active of Card.t list Player.store * levels * phase | Done
 [@@deriving show]
 
@@ -15,7 +8,7 @@ and levels = { level : Rank.t; level_13 : Rank.t; level_24 : Rank.t }
 
 and phase =
   | Trading of {
-      position : Position.t Player.store;
+      position : Player.position Player.store;
       traded : bool Player.store;
     }
   | Playing of { turn : Player.t; current : current }
@@ -71,7 +64,7 @@ let transition (state : t) (player : Player.t) (msg : message) :
             let traded = Player.set player true traded in
             if Player.for_all traded ~f:Fn.id then
               Playing
-                { turn = Position.who_is Big_slave position; current = Lead }
+                { turn = Player.who_is Big_slave position; current = Lead }
             else Trading { position; traded }
           in
 
@@ -88,7 +81,7 @@ let transition (state : t) (player : Player.t) (msg : message) :
               Error `Wrong_position
           | Trade1 c, Small_master -> (
               let hand = Player.get player hands in
-              let small_slave = Position.who_is Small_slave position in
+              let small_slave = Player.who_is Small_slave position in
               let hand_small_slave = Player.get small_slave hands in
               match hand - [ c ] with
               | None -> Error `Not_enough_cards
@@ -102,7 +95,7 @@ let transition (state : t) (player : Player.t) (msg : message) :
                       Broadcast (Trade (player, small_slave, [ c ])) ))
           | Trade1 c, Small_slave -> (
               let hand = Player.get player hands in
-              let small_master = Position.who_is Small_master position in
+              let small_master = Player.who_is Small_master position in
               let hand_small_master = Player.get small_master hands in
               match hand - [ c ] with
               | None -> Error `Not_enough_cards
@@ -116,7 +109,7 @@ let transition (state : t) (player : Player.t) (msg : message) :
                       Broadcast (Trade (player, small_master, [ c ])) ))
           | Trade2 (c, c'), Big_master -> (
               let hand = Player.get player hands in
-              let big_slave = Position.who_is Big_slave position in
+              let big_slave = Player.who_is Big_slave position in
               let hand_big_slave = Player.get big_slave hands in
               match hand - [ c; c' ] with
               | None -> Error `Not_enough_cards
@@ -130,7 +123,7 @@ let transition (state : t) (player : Player.t) (msg : message) :
                       Broadcast (Trade (player, big_slave, [ c; c' ])) ))
           | Trade2 (c, c'), Big_slave -> (
               let hand = Player.get player hands in
-              let big_master = Position.who_is Big_master position in
+              let big_master = Player.who_is Big_master position in
               let hand_big_master = Player.get big_master hands in
               match hand - [ c; c' ] with
               | None -> Error `Not_enough_cards

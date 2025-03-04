@@ -31,3 +31,9 @@ let tests () =
   assert (store |> set A 5 |> get A = 5);
   assert (store |> for_all ~f:(fun n -> n > 0));
   Stdio.print_endline "Player: tests passed"
+
+type position = Big_master | Small_master | Small_slave | Big_slave
+[@@deriving show, eq]
+
+let who_is (pos : position) (store : position store) =
+  find pos store ~equal:equal_position
