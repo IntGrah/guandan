@@ -82,25 +82,21 @@ let new_game () : t =
           Playing { turn = P1; current = Lead } )
   | _ -> failwith "Should have 108 cards"
 
+let rec subtract (xs : 'a list) (ys : 'a list) ~equal : 'a list option =
+  let rec sub (xs : 'a list) (y : 'a) : 'a list option =
+    match xs with
+    | [] -> None
+    | h :: hs when equal h y -> Some hs
+    | h :: hs -> sub hs y |> Option.map ~f:(List.cons h)
+  in
+  match (xs, ys) with
+  | xs, [] -> Some xs
+  | [], _ -> None
+  | xs, y :: ys ->
+      sub xs y |> Option.value ~default:xs |> Fn.flip subtract ys ~equal
+
 let transition (player : Player.t) (state : t) (msg : message) :
     (t * action, _) Result.t =
-  let rec remove_cards (cards : Card.t list) (hand : Card.t list) :
-      Card.t list option =
-    let rec remove_card (card : Card.t) : Card.t list -> Card.t list option =
-      function
-      | [] -> None
-      | h :: hs when Card.equal h card -> Some hs
-      | h :: hs -> Option.map (remove_card card hs) ~f:(List.cons h)
-    in
-    match (cards, hand) with
-    | [], hs -> Some hs
-    | _, [] -> None
-    | c :: cs, hs -> (
-        match remove_card c hs with
-        | Some hs' -> remove_cards cs hs'
-        | None -> remove_cards cs hs)
-  in
-
   match state with
   | Done -> Error `Wrong_phase
   | Active (hands, levels, phase) -> (
@@ -128,7 +124,7 @@ let transition (player : Player.t) (state : t) (msg : message) :
               let hand = Store.get player hands in
               let small_slave = Position.who_is Small_slave pos in
               let hand_small_slave = Store.get small_slave hands in
-              match remove_cards [ c ] hand with
+              match subtract hand [ c ] ~equal:Card.equal with
               | None -> Error `Not_enough_cards
               | Some hand' ->
                   Ok
@@ -142,7 +138,7 @@ let transition (player : Player.t) (state : t) (msg : message) :
               let hand = Store.get player hands in
               let small_master = Position.who_is Small_master pos in
               let hand_small_master = Store.get small_master hands in
-              match remove_cards [ c ] hand with
+              match subtract hand [ c ] ~equal:Card.equal with
               | None -> Error `Not_enough_cards
               | Some hand' ->
                   Ok
@@ -156,7 +152,7 @@ let transition (player : Player.t) (state : t) (msg : message) :
               let hand = Store.get player hands in
               let big_slave = Position.who_is Big_slave pos in
               let hand_big_slave = Store.get big_slave hands in
-              match remove_cards [ c0; c1 ] hand with
+              match subtract hand [ c0; c1 ] ~equal:Card.equal with
               | None -> Error `Not_enough_cards
               | Some hand' ->
                   Ok
@@ -170,7 +166,7 @@ let transition (player : Player.t) (state : t) (msg : message) :
               let hand = Store.get player hands in
               let big_master = Position.who_is Big_master pos in
               let hand_big_master = Store.get big_master hands in
-              match remove_cards [ c0; c1 ] hand with
+              match subtract hand [ c0; c1 ] ~equal:Card.equal with
               | None -> Error `Not_enough_cards
               | Some hand' ->
                   Ok
@@ -200,7 +196,7 @@ let transition (player : Player.t) (state : t) (msg : message) :
               Error `Doesn't_beat
           | Play (sc, cs), Resp (_, _) | Play (sc, cs), Lead -> (
               let hand = Store.get player hands in
-              match remove_cards cs hand with
+              match subtract hand cs ~equal:Card.equal with
               | None -> Error `Not_enough_cards
               | Some hand ->
                   (* TODO: detect when a playing phase is over *)
@@ -211,3 +207,14 @@ let transition (player : Player.t) (state : t) (msg : message) :
                   Ok
                     ( Active (Store.set player hand hands, levels, phase),
                       Broadcast "Player played" ))))
+
+let tests () =
+  let ( = ) = Option.equal (List.equal equal) in
+  assert (subtract ~equal [] [ 1 ] = None);
+  assert (subtract ~equal [ 2 ] [] = Some [ 2 ]);
+  assert (subtract ~equal [ 3 ] [ 3 ] = Some []);
+  assert (subtract ~equal [ 4; 4 ] [ 4 ] = Some [ 4 ]);
+  assert (
+    subtract ~equal [ 5; 4; 6; 1; 8; 8; 9; 1; 6 ] [ 1; 6; 8; 1; 8 ]
+    = Some [ 5; 4; 9; 6 ]);
+  Stdio.print_endline "Game: tests passed"

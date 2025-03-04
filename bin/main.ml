@@ -1,4 +1,5 @@
 let () = Card.tests ()
+let () = Game.tests ()
 let () = Joker.tests ()
 let () = Rank.tests ()
 let () = Rankj.tests ()
