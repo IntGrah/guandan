@@ -1,39 +1,41 @@
+open Base
+
 type t = A | B | C | D [@@deriving show, eq]
+type team = AC | BD [@@deriving show]
 
 let next : t -> t = function A -> B | B -> C | C -> D | D -> A
-let teammate (p : t) : t = next (next p)
+let teammate : t -> t = Fn.compose next next
+let team : t -> team = function A | C -> AC | B | D -> BD
 
-type 'a store = { a : 'a; b : 'a; c : 'a; d : 'a } [@@deriving show]
+type 'a store = Store of 'a * 'a * 'a * 'a [@@deriving show]
 
-let get (p : t) (store : 'a store) : 'a =
-  match p with A -> store.a | B -> store.b | C -> store.c | D -> store.d
+let init (x : 'a) : 'a store = Store (x, x, x, x)
 
-let set (p : t) (v : 'a) (store : 'a store) : 'a store =
+let get (p : t) (Store (a, b, c, d) : 'a store) : 'a =
+  match p with A -> a | B -> b | C -> c | D -> d
+
+let set (p : t) (x : 'a) (Store (a, b, c, d) : 'a store) : 'a store =
   match p with
-  | A -> { store with a = v }
-  | B -> { store with b = v }
-  | C -> { store with c = v }
-  | D -> { store with d = v }
+  | A -> Store (x, b, c, d)
+  | B -> Store (a, x, c, d)
+  | C -> Store (a, b, x, d)
+  | D -> Store (a, b, c, x)
 
-let find (v : 'a) { a = va; b = vb; c = vc; d = vd } ~equal : t =
-  if equal v va then A
-  else if equal v vb then B
-  else if equal v vc then C
-  else if equal v vd then D
+let find (Store (a, b, c, d) : 'a store) ~(f : 'a -> bool) : t =
+  if f a then A
+  else if f b then B
+  else if f c then C
+  else if f d then D
   else failwith "Not found"
-
-let for_all { a = va; b = vb; c = vc; d = vd } ~f : bool =
-  f va && f vb && f vc && f vd
-
-let tests () =
-  let store = { a = 1; b = 2; c = 3; d = 4 } in
-  assert (store |> get A = 1);
-  assert (store |> set A 5 |> get A = 5);
-  assert (store |> for_all ~f:(fun n -> n > 0));
-  Stdio.print_endline "Player: tests passed"
 
 type position = Big_master | Small_master | Small_slave | Big_slave
 [@@deriving show, eq]
 
-let who_is (pos : position) (store : position store) =
-  find pos store ~equal:equal_position
+let who_is (pos : position) (store : position store) : t =
+  find store ~f:(equal_position pos)
+
+let tests () =
+  let store : int store = Store (1, 2, 3, 4) in
+  assert (store |> get A = 1);
+  assert (store |> set A 5 |> get A = 5);
+  Stdio.print_endline "Player: tests passed"

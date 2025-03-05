@@ -21,8 +21,8 @@ let all : t list =
     Ace; Two; Three; Four; Five; Six; Seven; Eight; Nine; Ten; Jack; Queen; King;
   ]
 
-let consec (x : t) (y : t) : bool =
-  match (x, y) with
+let consec (r0 : t) (r1 : t) : bool =
+  match (r0, r1) with
   | Ace, Two
   | Two, Three
   | Three, Four
@@ -38,6 +38,20 @@ let consec (x : t) (y : t) : bool =
   | King, Ace ->
       true
   | _ -> false
+
+let succ : t -> t = function
+  | Two -> Three
+  | Three -> Four
+  | Four -> Five
+  | Five -> Six
+  | Six -> Seven
+  | Seven -> Eight
+  | Eight -> Nine
+  | Nine -> Ten
+  | Ten -> Jack
+  | Jack -> Queen
+  | Queen -> King
+  | King | Ace -> Ace
 
 let ( => ) : t -> t -> bool = consec
 

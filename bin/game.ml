@@ -1,25 +1,33 @@
 open Base
 
-type t = Active of Card.t list Player.store * levels * phase | Done
-[@@deriving show]
-
-and levels = { level : Rank.t; level_13 : Rank.t; level_24 : Rank.t }
-[@@deriving show]
-
-and phase =
+type t =
+  | Winner of Player.team
   | Trading of {
+      hands : Card.t list Player.store;
+      levels : levels;
       position : Player.position Player.store;
       traded : bool Player.store;
     }
-  | Playing of { turn : Player.t; current : current }
-[@@deriving show]
+  | Playing of {
+      hands : Card.t list Player.store;
+      levels : levels;
+      finish : finish;
+      turn : Player.t;
+      current : current;
+    }
 
-and current = Lead | Resp of Player.t * Score.t [@@deriving show]
+and levels = Levels of Rank.t * Rank.t * Player.team
+
+and finish =
+  | None
+  | Big_master of Player.t
+  | Small_master of Player.t * Player.t
+
+and current = Lead | Played of Player.t * Score.t [@@deriving show]
 
 type message =
   | Revolt
-  | Trade1 of Card.t
-  | Trade2 of Card.t * Card.t
+  | Trade of Card.t list
   | Play of Score.t * Card.t list
   | Pass
 [@@deriving show]
@@ -27,8 +35,7 @@ type message =
 type action =
   | None
   | Broadcast of broadcast
-  | PrivateMessage of Player.t * string
-[@@deriving show]
+  | Private_message of Player.t * string
 
 and broadcast =
   | Passed of Player.t
@@ -36,133 +43,199 @@ and broadcast =
   | Trade of Player.t * Player.t * Card.t list
 [@@deriving show]
 
-let new_game () : t =
-  let deck =
-    Card.all @ Card.all
-    |> List.map ~f:(fun c -> (Random.bits (), c))
-    |> List.sort ~compare:(fun (b0, _) (b1, _) -> Int.compare b0 b1)
-    |> List.map ~f:snd
-  in
-
-  match List.chunks_of ~length:27 deck with
-  | [ ha; hb; hc; hd ] ->
-      Active
-        ( { a = ha; b = hb; c = hc; d = hd },
-          { level = Two; level_13 = Two; level_24 = Two },
-          Playing { turn = A; current = Lead } )
+let deal_hands () : Card.t list Player.store =
+  Card.all @ Card.all
+  |> List.map ~f:(fun c -> (Random.bits (), c))
+  |> List.sort ~compare:(fun (b0, _) (b1, _) -> Int.compare b0 b1)
+  |> List.map ~f:snd |> List.chunks_of ~length:27
+  |> function
+  | [ ha; hb; hc; hd ] -> Player.Store (ha, hb, hc, hd)
   | _ -> failwith "Should have 108 cards"
 
-let transition (state : t) (player : Player.t) (msg : message) :
-    (t * action, _) Result.t =
-  let ( - ) = Multiset.subtract ~equal:Card.equal in
-  match state with
-  | Done -> Error `Wrong_phase
-  | Active (hands, levels, phase) -> (
-      match phase with
-      | Trading { position; traded } -> (
-          let phase =
-            let traded = Player.set player true traded in
-            if Player.for_all traded ~f:Fn.id then
-              Playing
-                { turn = Player.who_is Big_slave position; current = Lead }
-            else Trading { position; traded }
-          in
+let new_game () : t =
+  Playing
+    {
+      hands = deal_hands ();
+      levels = Levels (Two, Two, AC);
+      finish = None;
+      turn = A;
+      current = Lead;
+    }
 
-          match (msg, Player.get player position) with
-          | Play _, _ | Pass, _ -> Error `Wrong_phase
-          | (Trade1 _, _ | Trade2 _, _) when Player.get player traded ->
-              Error `Already_traded
-          | Trade1 _, Big_master
-          | Trade1 _, Big_slave
-          | Trade2 _, Small_master
-          | Trade2 _, Small_slave
-          | Revolt, Big_master
-          | Revolt, Small_master ->
-              Error `Wrong_position
-          | Trade1 c, Small_master -> (
-              let hand = Player.get player hands in
-              let small_slave = Player.who_is Small_slave position in
-              let hand_small_slave = Player.get small_slave hands in
-              match hand - [ c ] with
-              | None -> Error `Not_enough_cards
-              | Some hand' ->
-                  Ok
-                    ( Active
-                        ( hands |> Player.set player hand'
-                          |> Player.set small_slave (c :: hand_small_slave),
-                          levels,
-                          phase ),
-                      Broadcast (Trade (player, small_slave, [ c ])) ))
-          | Trade1 c, Small_slave -> (
-              let hand = Player.get player hands in
-              let small_master = Player.who_is Small_master position in
-              let hand_small_master = Player.get small_master hands in
-              match hand - [ c ] with
-              | None -> Error `Not_enough_cards
-              | Some hand' ->
-                  Ok
-                    ( Active
-                        ( hands |> Player.set player hand'
-                          |> Player.set small_master (c :: hand_small_master),
-                          levels,
-                          phase ),
-                      Broadcast (Trade (player, small_master, [ c ])) ))
-          | Trade2 (c, c'), Big_master -> (
-              let hand = Player.get player hands in
-              let big_slave = Player.who_is Big_slave position in
-              let hand_big_slave = Player.get big_slave hands in
-              match hand - [ c; c' ] with
-              | None -> Error `Not_enough_cards
-              | Some hand' ->
-                  Ok
-                    ( Active
-                        ( hands |> Player.set player hand'
-                          |> Player.set big_slave (c :: c' :: hand_big_slave),
-                          levels,
-                          phase ),
-                      Broadcast (Trade (player, big_slave, [ c; c' ])) ))
-          | Trade2 (c, c'), Big_slave -> (
-              let hand = Player.get player hands in
-              let big_master = Player.who_is Big_master position in
-              let hand_big_master = Player.get big_master hands in
-              match hand - [ c; c' ] with
-              | None -> Error `Not_enough_cards
-              | Some hand' ->
-                  Ok
-                    ( Active
-                        ( hands |> Player.set player hand'
-                          |> Player.set big_master (c :: c' :: hand_big_master),
-                          levels,
-                          phase ),
-                      Broadcast (Trade (player, big_master, [ c; c' ])) ))
-          | Revolt, _ -> Error `Wrong_position (* TODO: implement revolution *))
-      | Playing { turn; current } -> (
-          match (msg, current) with
-          | Revolt, _ | Trade1 _, _ | Trade2 _, _ -> Error `Wrong_phase
-          | (Play _, _ | Pass, _) when not (Player.equal player turn) ->
-              Error `Not_your_turn
-          | Pass, Lead -> Error `Cannot_pass
-          | Pass, Resp (leader, _) ->
-              let current =
-                if Player.(equal (next turn) leader) then Lead else current
+let transition (state : t) (player : Player.t) (msg : message) :
+    (t * action list, _) Result.t =
+  let ( - ) = Multiset.subtract ~equal:Card.equal in
+
+  match state with
+  | Winner _ -> Error `Wrong_phase
+  | Trading { hands; levels; position; traded } -> (
+      let hand = Player.get player hands in
+      let level =
+        match levels with Levels (r, _, AC) | Levels (_, r, BD) -> r
+      in
+      let pos = Player.get player position in
+
+      let verify_trade (cards : Card.t list) =
+        (* Ensure the correct quantity of cards are being traded,
+           and ensure that slaves give their highest cards *)
+        match (pos, List.map cards ~f:Rankj.of_card) with
+        | Big_master, [ _; _ ] | Small_master, [ _ ] -> true
+        | Small_slave, ([ _ ] as offered) | Big_slave, ([ _; _ ] as offered) ->
+            let sort_rev =
+              Fn.compose List.rev @@ List.sort ~compare:(Rankj.compare_at level)
+            in
+            let rec compare2 xs ys =
+              match (xs, ys) with
+              | [], _ | _, [] -> []
+              | x :: xs, y :: ys -> Rankj.compare_at level x y :: compare2 xs ys
+            in
+            hand
+            |> List.filter ~f:(Fn.non @@ Card.equal (R (level, Hearts)))
+            |> List.map ~f:Rankj.of_card |> sort_rev
+            |> compare2 (sort_rev offered)
+            |> List.for_all ~f:(fun x -> x >= 0)
+        | _ -> false
+      in
+
+      match msg with
+      | Play _ | Pass -> Error `Wrong_phase
+      | Trade _ when Player.get player traded -> Error `Already_traded
+      | Revolt -> Error `Not_implemented (* TODO: implement *)
+      | Trade cards when not (verify_trade cards) -> Error `Bad_trade
+      | Trade cards -> (
+          match hand - cards with
+          | None -> Error `Not_enough_cards
+          | Some hand' -> (
+              let receiver : Player.t =
+                match pos with
+                | Big_master -> Player.who_is Big_slave position
+                | Big_slave -> Player.who_is Big_master position
+                | Small_master -> Player.who_is Small_slave position
+                | Small_slave -> Player.who_is Small_master position
               in
-              (* TODO: implement follower of leader *)
-              let phase = Playing { turn = Player.next turn; current } in
-              Ok (Active (hands, levels, phase), Broadcast (Passed player))
-          | Play (sc, cs), _ when not (Score.verify sc cs) -> Error `Wrong_score
-          | Play (sc, _), Resp (_, sc')
-            when not (Score.lt_at levels.level sc' sc) ->
-              Error `Doesn't_beat
-          | Play (sc, cs), Resp (_, _) | Play (sc, cs), Lead -> (
-              let hand = Player.get player hands in
-              match hand - cs with
-              | None -> Error `Not_enough_cards
-              | Some hand ->
-                  (* TODO: detect when a playing phase is over *)
-                  let phase =
-                    Playing
-                      { turn = Player.next turn; current = Resp (player, sc) }
-                  in
+              let hands' =
+                hands |> Player.set player hand'
+                |> Player.set receiver (Player.get receiver hands @ cards)
+              in
+              match Player.set player true traded with
+              | Store (true, true, true, true) ->
                   Ok
-                    ( Active (Player.set player hand hands, levels, phase),
-                      Broadcast (Played (player, sc)) ))))
+                    ( Playing
+                        {
+                          hands = hands';
+                          levels;
+                          finish = None;
+                          turn = Player.who_is Big_slave position;
+                          current = Lead;
+                        },
+                      [ Broadcast (Trade (player, receiver, cards)) ] )
+              | traded' ->
+                  Ok
+                    ( Trading
+                        { hands = hands'; levels; position; traded = traded' },
+                      [ Broadcast (Trade (player, receiver, cards)) ] ))))
+  | Playing ({ hands; levels; finish; turn; current } as playing) -> (
+      let hand = Player.get player hands in
+      let level =
+        match levels with Levels (r, _, AC) | Levels (_, r, BD) -> r
+      in
+
+      match msg with
+      | Revolt | Trade _ -> Error `Wrong_phase
+      | (Play _ | Pass) when not (Player.equal player turn) ->
+          Error `Not_your_turn
+      | Pass -> (
+          match current with
+          | Lead -> Error `Cannot_pass
+          | Played (leader, _) ->
+              let rec next_phase (p : Player.t) : t =
+                match Player.(get p hands |> List.is_empty, equal p leader) with
+                | true, true ->
+                    Playing
+                      { playing with turn = Player.teammate p; current = Lead }
+                | true, false -> next_phase (Player.next p)
+                | false, true ->
+                    Playing { playing with turn = p; current = Lead }
+                | false, false -> Playing { playing with turn = p }
+              in
+              Ok (next_phase (Player.next turn), [ Broadcast (Passed player) ]))
+      | Play (score, cards) when not (Score.verify score cards) ->
+          Error `Wrong_score
+      | Play (score', cards) -> (
+          match (current, hand - cards) with
+          | _, None -> Error `Not_enough_cards
+          | Played (_, score), _ when not (Score.lt_at level score score') ->
+              Error `Doesn't_beat
+          | Played (_, _), Some hand' | Lead, Some hand' -> (
+              let hands' = Player.set player hand' hands in
+              if not (List.is_empty hand') then
+                Ok
+                  ( Playing
+                      {
+                        hands = hands';
+                        levels;
+                        finish;
+                        turn = Player.next turn;
+                        (* skip players who have finished *)
+                        current = Played (player, score');
+                      },
+                    [ Broadcast (Played (player, score')) ] )
+              else
+                match finish with
+                | None ->
+                    Ok
+                      ( Playing
+                          {
+                            hands = hands';
+                            levels;
+                            finish = Big_master player;
+                            turn = Player.next turn;
+                            (* skip players who have finished *)
+                            current = Played (player, score');
+                          },
+                        [ Broadcast (Played (player, score')) ] )
+                | Big_master bm -> (
+                    (* Attempt to short circuit *)
+                    match Player.(levels, team bm, team player) with
+                    | Levels (Ace, _, AC), AC, AC ->
+                        Ok (Winner AC, [ Broadcast (Played (player, score')) ])
+                    | Levels (_, Ace, BD), BD, BD ->
+                        Ok (Winner BD, [ Broadcast (Played (player, score')) ])
+                    | _ ->
+                        Ok
+                          ( Playing
+                              {
+                                hands = hands';
+                                levels;
+                                finish = Small_master (bm, player);
+                                turn = Player.next turn;
+                                (* skip players who have finished *)
+                                current = Played (player, score');
+                              },
+                            [ Broadcast (Played (player, score')) ] ))
+                | Small_master (bm, sm) ->
+                    let (Levels (ac, bd, _)) = levels in
+                    let levels' : levels =
+                      match Player.(team bm, team sm, team player) with
+                      | AC, AC, BD ->
+                          Levels (Rank.succ @@ Rank.succ @@ Rank.succ ac, bd, AC)
+                      | AC, BD, AC -> Levels (Rank.succ @@ Rank.succ ac, bd, AC)
+                      | AC, BD, BD -> Levels (Rank.succ ac, bd, AC)
+                      | BD, BD, AC ->
+                          Levels (ac, Rank.succ @@ Rank.succ @@ Rank.succ bd, BD)
+                      | BD, AC, BD -> Levels (ac, Rank.succ @@ Rank.succ bd, BD)
+                      | BD, AC, AC -> Levels (ac, Rank.succ bd, BD)
+                      | _ -> failwith "Invalid teams"
+                    in
+                    Ok
+                      ( Trading
+                          {
+                            hands = deal_hands ();
+                            levels = levels';
+                            position =
+                              Player.(
+                                init Big_slave |> set bm Big_master
+                                |> set sm Small_master |> set player Small_slave);
+                            traded = Player.init false;
+                          },
+                        [ Broadcast (Played (player, score')) ] ))))
