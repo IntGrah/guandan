@@ -53,8 +53,6 @@ let succ : t -> t = function
   | Queen -> King
   | King | Ace -> Ace
 
-let ( => ) : t -> t -> bool = consec
-
 let compare_at (level : t) (r0 : t) (r1 : t) : int =
   match (equal r0 level, equal r1 level) with
   | true, true -> 0
