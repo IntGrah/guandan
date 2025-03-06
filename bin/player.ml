@@ -7,6 +7,10 @@ let next : t -> t = function A -> B | B -> C | C -> D | D -> A
 let teammate : t -> t = Fn.compose next next
 let team : t -> team = function A | C -> AC | B | D -> BD
 
+let rec find_next (player : t) ~(f : 'a -> bool) : t =
+  let next_player = next player in
+  if f next_player then next_player else find_next next_player ~f
+
 type 'a store = Store of 'a * 'a * 'a * 'a [@@deriving show]
 
 let init (x : 'a) : 'a store = Store (x, x, x, x)
@@ -14,8 +18,8 @@ let init (x : 'a) : 'a store = Store (x, x, x, x)
 let get (p : t) (Store (a, b, c, d) : 'a store) : 'a =
   match p with A -> a | B -> b | C -> c | D -> d
 
-let set (p : t) (x : 'a) (Store (a, b, c, d) : 'a store) : 'a store =
-  match p with
+let set (player : t) (x : 'a) (Store (a, b, c, d) : 'a store) : 'a store =
+  match player with
   | A -> Store (x, b, c, d)
   | B -> Store (a, x, c, d)
   | C -> Store (a, b, x, d)
@@ -31,8 +35,8 @@ let find (Store (a, b, c, d) : 'a store) ~(f : 'a -> bool) : t =
 type position = Big_master | Small_master | Small_slave | Big_slave
 [@@deriving show, eq]
 
-let who_is (pos : position) (store : position store) : t =
-  find store ~f:(equal_position pos)
+let who_is (position : position) (store : position store) : t =
+  find store ~f:(equal_position position)
 
 let tests () =
   let store : int store = Store (1, 2, 3, 4) in
