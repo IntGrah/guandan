@@ -20,86 +20,136 @@ type t =
   | Triple of Rank.t (* 222 to AAA *)
   | Pair of Rankj.t (* 22 to RR *)
   | Single of Rankj.t (* 2 to R *)
-[@@deriving show]
+[@@deriving show, eq]
 
-let verify (score : t) (cards : Card.t list) : bool =
-  let rec pairwise (r : 'a -> 'a -> bool) : 'a list -> bool = function
+let ( ||? ) n m = if n = 0 then m else n
+
+module Collate = struct
+  type t = R of Rank.t * Suit.t list | J of Joker.t * int
+
+  let compare (g0 : t) (g1 : t) =
+    match (g0, g1) with
+    | R (r0, ss0), R (r1, ss1) ->
+        Int.compare (List.length ss0) (List.length ss1) ||? Rank.compare r0 r1
+    | R (_, ss0), J (_, n1) -> Int.compare (List.length ss0) n1 ||? -1
+    | J (_, n0), R (_, ss1) -> Int.compare n0 (List.length ss1) ||? 1
+    | J (j0, n0), J (j1, n1) -> Int.compare n0 n1 ||? Joker.compare j0 j1
+
+  let collate (cards : Card.t list) =
+    let rec add_to (acc : t list) (card : Card.t) : t list =
+      match (card, acc) with
+      | R (r, s), [] -> [ R (r, [ s ]) ]
+      | J j, [] -> [ J (j, 1) ]
+      | R (r, s), R (r', ss) :: cols when Rank.equal r r' ->
+          R (r, s :: ss) :: cols
+      | J j, J (j', n) :: cols when Joker.equal j j' -> J (j, n + 1) :: cols
+      | c, g :: gs -> g :: add_to gs c
+    in
+    List.fold cards ~init:[] ~f:add_to
+    |> List.map ~f:(function
+         | R (r, ss) -> R (r, List.sort ss ~compare:Suit.compare)
+         | J (j, n) -> J (j, n))
+    |> List.sort ~compare
+end
+
+let infer (level : Rank.t) (cards : Card.t list) : t list =
+  let wlog_gt (r0 : Rank.t) (r1 : Rank.t) =
+    if Rank.compare_at level r0 r1 < 0 then (r1, r0) else (r0, r1)
+  in
+
+  let rec pairwise : 'a list -> bool = function
     | [] | [ _ ] -> true
-    | x :: x' :: xs -> r x x' && pairwise r (x' :: xs)
+    | x0 :: x1 :: xs -> Rank.consec x1 x0 && pairwise (x1 :: xs)
   in
 
-  let diddy r r0 r1 =
-    Rank.((r0 => r1 && equal r r1) || (r1 => r0 && equal r r0))
+  let max_seq (rs : Rank.t list) (f : Rank.t -> t list) : t list =
+    match List.rev rs with
+    | r0 :: rs when pairwise (r0 :: rs) -> f r0
+    | r0 :: r1 :: rs when pairwise ((r1 :: rs) @ [ r0 ]) -> f r1
+    | _ -> []
   in
 
-  let frequencies : (Rankj.t * int) list =
-    cards |> List.map ~f:Rankj.of_card
-    |> List.stable_dedup ~compare:Rankj.compare
-    |> List.map ~f:(fun k ->
-           (k, List.count cards ~f:(fun c -> Rankj.equal k (Rankj.of_card c))))
-    |> List.sort ~compare:(fun (k0, f0) (k1, f1) ->
-           match Int.compare f0 f1 with 0 -> Rankj.compare k0 k1 | n -> n)
-  in
-
-  (* Prolog! *)
-  match (frequencies, score) with
-  | [ (J Black, 2); (J Red, 2) ], JokerBomb -> true
-  | [ (R r, 10) ], BombTen r' -> Rank.equal r r'
-  | [ (R r, 9) ], BombNine r' -> Rank.equal r r'
-  | [ (R r, 8) ], BombEight r' -> Rank.equal r r'
-  | [ (R r, 7) ], BombSeven r' -> Rank.equal r r'
-  | [ (R r, 6) ], BombSix r' -> Rank.equal r r'
-  | [ (R r, 5) ], BombFive r' -> Rank.equal r r'
-  | [ (R r, 4) ], BombFour r' -> Rank.equal r r'
-  | ( [ (R r0, 1); (R r1, 1); (R r2, 1); (R r3, 1); (R r4, 1) ],
-      StraightFlush (r, s) ) ->
-      Rank.(
-        (pairwise ( => ) [ r0; r1; r2; r3; r4 ] && equal r r4)
-        || (pairwise ( => ) [ r4; r0; r1; r2; r3 ] && equal r r3))
-      && List.for_all cards ~f:(function
-           | R (_, s') -> Suit.equal s s'
-           | _ -> false)
-  | [ (R r0, 1); (R r1, 1); (R r2, 1); (R r3, 1); (R r4, 1) ], Straight r ->
-      Rank.(
-        (pairwise ( => ) [ r0; r1; r2; r3; r4 ] && equal r r4)
-        || (pairwise ( => ) [ r4; r0; r1; r2; r3 ] && equal r r3))
-  | [ (R r0, 2); (R r1, 2); (R r2, 2) ], Tube r ->
-      Rank.(
-        (r0 => r1 && r1 => r2 && equal r r2)
-        || (r2 => r0 && r0 => r1 && equal r r1))
-  | [ (R r0, 3); (R r1, 7) ], Diddy2 (r, R k0, R k1)
-  | [ (R r0, 3); (R r1, 5) ], Diddy1 (r, R k0, R k1) ->
-      Rank.(
-        ((r0 => r1 && equal r r1) || (r1 => r0 && equal r r0))
-        && equal r1 k0 && equal r1 k1)
-  | [ (R r0, 5); (R r1, 5) ], Diddy2 (r, R k0, R k1)
-  | [ (R r0, 4); (R r1, 4) ], Diddy1 (r, R k0, R k1) ->
-      diddy r r0 r1
-      && Rank.((equal r0 k0 && equal r1 k1) || (equal r1 k0 && equal r0 k1))
-  | [ (rj0, 2); (R r0, 3); (R r1, 5) ], Diddy2 (r, kj0, kj1)
-  | [ (rj0, 1); (R r0, 3); (R r1, 4) ], Diddy1 (r, kj0, kj1) ->
-      diddy r r0 r1
-      && Rankj.(
-           (equal rj0 kj0 && equal (R r1) kj1)
-           || (equal (R r1) kj0 && equal rj0 kj1))
-  | [ (rj0, 2); (rj1, 2); (R r0, 3); (R r1, 3) ], Diddy2 (r, kj0, kj1)
-  | [ (rj0, 1); (rj1, 1); (R r0, 3); (R r1, 3) ], Diddy1 (r, kj0, kj1) ->
-      diddy r r0 r1
-      && Rankj.(
-           (equal rj0 kj0 && equal rj1 kj1) || (equal rj1 kj0 && equal rj0 kj1))
-  | [ (R r0, 3); (R r1, 3) ], Plate r -> diddy r r0 r1
-  | [ (R r0, 5) ], TripleDouble (r, R r') | [ (R r0, 4) ], TripleSingle (r, R r')
+  match Collate.collate cards with
+  | [ J (Black, 2); J (Red, 2) ] -> [ JokerBomb ]
+  | [ R (r, [ _; _; _; _; _; _; _; _; _; _ ]) ] -> [ BombTen r ]
+  | [ R (r, [ _; _; _; _; _; _; _; _; _ ]) ] -> [ BombNine r ]
+  | [ R (r, [ _; _; _; _; _; _; _; _ ]) ] -> [ BombEight r ]
+  | [ R (r, [ _; _; _; _; _; _; _ ]) ] -> [ BombSeven r ]
+  | [ R (r, [ _; _; _; _; _; _ ]) ] -> [ BombSix r ]
+  | [ R (r, [ _; _; _; _; _ ]) ] -> [ BombFive r; TripleDouble (r, R r) ]
+  | [ R (r, [ _; _; _; _ ]) ] -> [ BombFour r; TripleSingle (r, R r) ]
+  | [ R (r, [ _; _; _ ]) ] -> [ Triple r ]
+  | [ R (r, [ _; _ ]) ] -> [ Pair (R r) ]
+  | [ R (r, [ _ ]) ] -> [ Single (R r) ]
+  | [ J (j, 2) ] -> [ Pair (J j) ]
+  | [ J (j, 1) ] -> [ Single (J j) ]
+  | [ R (r0, [ _; _ ]); R (r1, [ _; _; _ ]) ] -> [ TripleDouble (r1, R r0) ]
+  | [ J (j0, 2); R (r1, [ _; _; _ ]) ] -> [ TripleDouble (r1, J j0) ]
+  | [ R (r0, [ _ ]); R (r1, [ _; _; _ ]) ] -> [ TripleSingle (r1, R r0) ]
+  | [ J (j0, 1); R (r1, [ _; _; _ ]) ] -> [ TripleSingle (r1, J j0) ]
+  | [ R (r0, [ _; _; _ ]); R (r1, [ _; _; _ ]) ] ->
+      max_seq [ r0; r1 ] (fun r -> [ Plate r ])
+  | [
+   R (r0, [ s0 ]); R (r1, [ s1 ]); R (r2, [ s2 ]); R (r3, [ s3 ]); R (r4, [ s4 ]);
+  ] ->
+      max_seq [ r0; r1; r2; r3; r4 ] (fun r ->
+          match List.all_equal ~equal:Suit.equal [ s0; s1; s2; s3; s4 ] with
+          | None -> [ Straight r ]
+          | Some s -> [ StraightFlush (r, s); Straight r ])
+  | [ R (r0, [ _; _ ]); R (r1, [ _; _ ]); R (r2, [ _; _ ]) ] ->
+      max_seq [ r0; r1; r2 ] (fun r -> [ Tube r ])
+  (* Diddy 2 *)
+  | [ R (r0, [ _; _; _ ]); R (r1, [ _; _; _; _; _; _; _ ]) ] ->
+      max_seq [ r0; r1 ] (fun r -> [ Diddy2 (r, R r1, R r1) ])
+  | [ R (r1, [ _; _; _; _; _ ]); R (r0, [ _; _; _; _; _ ]) ] ->
+      let k0, k1 = wlog_gt r0 r1 in
+      max_seq [ r0; r1 ] (fun r -> [ Diddy2 (r, R k0, R k1) ])
+  | [ R (r0, [ _; _; _ ]); R (r1, [ _; _; _ ]); R (k, [ _; _; _; _ ]) ] ->
+      max_seq [ r0; r1 ] (fun r -> [ Diddy2 (r, R k, R k) ])
+  | [ J (k, 2); R (r0, [ _; _; _ ]); R (r1, [ _; _; _; _; _ ]) ] ->
+      max_seq [ r0; r1 ] (fun r -> [ Diddy2 (r, J k, R r1) ])
+  | [ R (k, [ _; _ ]); R (r0, [ _; _; _ ]); R (r1, [ _; _; _; _; _ ]) ] ->
+      let k0, k1 = wlog_gt k r1 in
+      max_seq [ r0; r1 ] (fun r -> [ Diddy2 (r, R k0, R k1) ])
+  | [ J (k1, 2); J (k0, 2); R (r0, [ _; _; _ ]); R (r1, [ _; _; _ ]) ] ->
+      max_seq [ r0; r1 ] (fun r -> [ Diddy2 (r, J k0, J k1) ])
+  | [ R (k1, [ _; _ ]); J (k0, 2); R (r0, [ _; _; _ ]); R (r1, [ _; _; _ ]) ] ->
+      max_seq [ r0; r1 ] (fun r -> [ Diddy2 (r, J k0, R k1) ])
+  | [
+   R (k0, [ _; _ ]); R (k1, [ _; _ ]); R (r0, [ _; _; _ ]); R (r1, [ _; _; _ ]);
+  ] ->
+      let k0, k1 = wlog_gt k0 k1 in
+      max_seq [ r0; r1 ] (fun r -> [ Diddy2 (r, R k0, R k1) ])
+  (* Diddy 1 *)
+  | [ R (r0, [ _; _; _ ]); R (r1, [ _; _; _; _; _ ]) ] ->
+      max_seq [ r0; r1 ] (fun r -> [ Diddy1 (r, R r1, R r1) ])
+  | [ R (r1, [ _; _; _; _ ]); R (r0, [ _; _; _; _ ]) ] ->
+      let k0, k1 = wlog_gt r0 r1 in
+      max_seq [ r0; r1 ] (fun r -> [ Diddy1 (r, R k0, R k1) ])
+  | [ J (k, 2); R (r0, [ _; _; _ ]); R (r1, [ _; _; _ ]) ] ->
+      max_seq [ r0; r1 ] (fun r -> [ Diddy1 (r, J k, J k) ])
+  | [ R (k, [ _; _ ]); R (r0, [ _; _; _ ]); R (r1, [ _; _; _ ]) ] ->
+      max_seq [ r0; r1 ] (fun r -> [ Diddy1 (r, R k, R k) ])
+  | [ J (k, 1); R (r0, [ _; _; _ ]); R (r1, [ _; _; _; _ ]) ] ->
+      max_seq [ r0; r1 ] (fun r -> [ Diddy1 (r, J k, R r1) ])
+  | [ R (k, [ _ ]); R (r0, [ _; _; _ ]); R (r1, [ _; _; _; _ ]) ] ->
+      let k0, k1 = wlog_gt k r1 in
+      max_seq [ r0; r1 ] (fun r -> [ Diddy1 (r, R k0, R k1) ])
+  | [ J (k1, 1); J (k0, 1); R (r0, [ _; _; _ ]); R (r1, [ _; _; _ ]) ] ->
+      max_seq [ r0; r1 ] (fun r -> [ Diddy1 (r, J k0, J k1) ])
+  | [ R (k1, [ _ ]); J (k0, 1); R (r0, [ _; _; _ ]); R (r1, [ _; _; _ ]) ] ->
+      max_seq [ r0; r1 ] (fun r -> [ Diddy1 (r, J k0, R k1) ])
+  | [ R (k0, [ _ ]); R (k1, [ _ ]); R (r0, [ _; _; _ ]); R (r1, [ _; _; _ ]) ]
     ->
-      Rank.(equal r0 r && equal r r')
-  | [ (rj0, 2); (R r0, 3) ], TripleDouble (r, rj)
-  | [ (rj0, 1); (R r0, 3) ], TripleSingle (r, rj) ->
-      Rank.equal r r0 && Rankj.equal rj rj0
-  | [ (R r0, 3) ], Triple r -> Rank.equal r r0
-  | [ (rj0, 2) ], Pair rj | [ (rj0, 1) ], Single rj -> Rankj.equal rj rj0
-  | _ -> false
+      let k0, k1 = wlog_gt k0 k1 in
+      max_seq [ r0; r1 ] (fun r -> [ Diddy1 (r, R k0, R k1) ])
+      (* =============================================== *)
+  | _ -> []
+
+let verify (level : Rank.t) (score : t) (cards : Card.t list) : bool =
+  List.mem (infer level cards) ~equal score
 
 let lt_at (level : Rank.t) (score0 : t) (score1 : t) : bool =
-  let ( ||? ) n m = if n = 0 then m else n in
   match (score0, score1) with
   | JokerBomb, _ -> false
   | _, JokerBomb -> true
@@ -149,10 +199,12 @@ let lt_at (level : Rank.t) (score0 : t) (score1 : t) : bool =
   | _ -> false
 
 let tests () =
-  let assert_score score cards = assert (verify score cards) in
-  let assert_not_score score cards = assert (not @@ verify score cards) in
-  assert_score JokerBomb [ J Red; J Black; J Black; J Red ];
-  assert_score (BombTen Ace)
+  let assert_score level score cards = assert (verify level score cards) in
+  let assert_not_score level score cards =
+    assert (verify level score cards |> not)
+  in
+  assert_score Three JokerBomb [ J Red; J Black; J Black; J Red ];
+  assert_score Three (BombTen Ace)
     [
       R (Ace, Clubs);
       R (Ace, Clubs);
@@ -165,12 +217,12 @@ let tests () =
       R (Ace, Hearts);
       R (Ace, Hearts);
     ];
-  assert_score (BombFour Four)
+  assert_score Three (BombFour Four)
     [ R (Four, Hearts); R (Four, Clubs); R (Four, Spades); R (Four, Diamonds) ];
-  assert_score
+  assert_score Three
     (TripleSingle (Four, J Red))
     [ R (Four, Hearts); J Red; R (Four, Clubs); R (Four, Spades) ];
-  assert_not_score
+  assert_not_score Three
     (TripleDouble (Three, R Two))
     [
       R (Five, Hearts);
@@ -179,10 +231,10 @@ let tests () =
       R (Two, Spades);
       R (Five, Spades);
     ];
-  assert_score
+  assert_score Three
     (TripleDouble (Four, J Red))
     [ R (Four, Hearts); J Red; R (Four, Clubs); J Red; R (Four, Spades) ];
-  assert_score
+  assert_score Three
     (StraightFlush (Five, Clubs))
     [
       R (Five, Clubs);
@@ -191,7 +243,7 @@ let tests () =
       R (Ace, Clubs);
       R (Two, Clubs);
     ];
-  assert_score
+  assert_score Three
     (StraightFlush (Ace, Clubs))
     [
       R (Ten, Clubs);
@@ -200,7 +252,7 @@ let tests () =
       R (King, Clubs);
       R (Ace, Clubs);
     ];
-  assert_score (Straight Five)
+  assert_score Three (Straight Five)
     [
       R (Ace, Clubs);
       R (Two, Clubs);
@@ -208,7 +260,7 @@ let tests () =
       R (Four, Diamonds);
       R (Five, Clubs);
     ];
-  assert_score (Straight Ace)
+  assert_score Three (Straight Ace)
     [
       R (Ten, Clubs);
       R (Jack, Clubs);
@@ -216,7 +268,7 @@ let tests () =
       R (King, Clubs);
       R (Ace, Clubs);
     ];
-  assert_score (Plate Two)
+  assert_score Three (Plate Two)
     [
       R (Ace, Clubs);
       R (Two, Clubs);
@@ -225,7 +277,7 @@ let tests () =
       R (Two, Spades);
       R (Ace, Spades);
     ];
-  assert_score (Plate Ace)
+  assert_score Three (Plate Ace)
     [
       R (Ace, Clubs);
       R (King, Clubs);
@@ -234,7 +286,7 @@ let tests () =
       R (King, Spades);
       R (Ace, Spades);
     ];
-  assert_score
+  assert_score Three
     (Diddy2 (Two, J Red, J Black))
     [
       J Black;
@@ -248,7 +300,7 @@ let tests () =
       R (Two, Clubs);
       R (Ace, Clubs);
     ];
-  assert_score
+  assert_not_score Three
     (Diddy2 (Two, J Black, J Red))
     [
       J Black;
@@ -262,7 +314,7 @@ let tests () =
       R (Two, Clubs);
       R (Ace, Clubs);
     ];
-  assert_score
+  assert_score Three
     (Diddy2 (Ace, R King, R Queen))
     [
       R (King, Clubs);
@@ -276,11 +328,42 @@ let tests () =
       R (King, Clubs);
       R (Ace, Clubs);
     ];
-  assert_score (Triple Ten) [ R (Ten, Clubs); R (Ten, Clubs); R (Ten, Spades) ];
-  assert_score (Pair (R Ace)) [ R (Ace, Clubs); R (Ace, Hearts) ];
-  assert_score (Pair (J Red)) [ J Red; J Red ];
-  assert_not_score (Pair (J Red)) [ J Red; J Black ];
+  assert_not_score Queen
+    (Diddy2 (Ace, R King, R Queen))
+    [
+      R (King, Clubs);
+      R (King, Clubs);
+      R (Queen, Clubs);
+      R (Queen, Clubs);
+      R (Ace, Clubs);
+      R (King, Clubs);
+      R (King, Clubs);
+      R (Ace, Clubs);
+      R (King, Clubs);
+      R (Ace, Clubs);
+    ];
+  assert_score Queen
+    (Diddy2 (Ace, R Queen, R King))
+    [
+      R (King, Clubs);
+      R (King, Clubs);
+      R (Queen, Clubs);
+      R (Queen, Clubs);
+      R (Ace, Clubs);
+      R (King, Clubs);
+      R (King, Clubs);
+      R (Ace, Clubs);
+      R (King, Clubs);
+      R (Ace, Clubs);
+    ];
+  assert_score Three (Triple Ten)
+    [ R (Ten, Clubs); R (Ten, Clubs); R (Ten, Spades) ];
+  assert_score Three (Pair (R Ace)) [ R (Ace, Clubs); R (Ace, Hearts) ];
+  assert_score Three (Pair (J Red)) [ J Red; J Red ];
+  assert_not_score Three (Pair (J Red)) [ J Red; J Black ];
   assert (lt_at Ten (Diddy1 (Ace, R Two, R Three)) (Diddy1 (Ace, R Two, R Four)));
+  assert (lt_at Five (Diddy1 (Ace, R Two, R Six)) (Diddy1 (Ace, R Two, R Five)));
+  assert (lt_at Six (Diddy1 (Ace, R Seven, R Six)) (Diddy1 (Ace, R Six, R Five)));
   assert (lt_at Ten (TripleDouble (Ace, J Red)) (TripleDouble (Ten, R Five)));
   assert (lt_at Nine (TripleDouble (Ten, R Five)) (TripleDouble (Ace, J Red)));
   Stdio.print_endline "Score: tests passed"
