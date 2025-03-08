@@ -1,6 +1,5 @@
-(executable
- (public_name guandan)
- (name main)
- (libraries guandan base)
+(library
+ (name guandan)
+ (libraries base stdio)
  (preprocess
   (pps ppx_deriving.show ppx_deriving.eq ppx_deriving.ord)))
