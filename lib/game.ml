@@ -7,7 +7,7 @@ type t =
       Card.t list Player.store
       * level
       * Player.position Player.store
-      * bool Player.store
+      * int Player.store
   | Playing of
       Card.t list Player.store
       * level
@@ -27,9 +27,10 @@ let rank_of : level -> Rank.t = function
   | Level (r, _, AC) | Level (_, r, BD) -> r
 
 type message =
+  | Sort
   | Revolt
-  | Trade of Card.t list
-  | Play of Score.t * Card.t list
+  | Trade of Card.t
+  | Play of Card.t list (* Score.t *)
   | Pass
 [@@deriving show]
 
@@ -48,41 +49,59 @@ let new_game () : t =
 let transition (state : t) (player : Player.t) (msg : message) :
     (t * _ list, _) Result.t =
   let ( let* ) x f = Result.bind x ~f in
-  let ( - ) (xs : Card.t list) (ys : Card.t list) =
+  let ( -- ) (xs : Card.t list) (ys : Card.t list) =
     Multiset.subtract xs ys ~equal:Card.equal
     |> Result.of_option ~error:`Not_enough_cards
-  in
+  in 
 
   match (state, msg) with
-  | Trading (_, _, _, traded), Trade _ when Player.get player traded ->
+  | Playing (hands, level, finished, turn, current), Sort ->
+      let rank = rank_of level in
+      Ok
+        ( Playing
+            ( hands
+              |> Player.set player
+                   (Player.get player hands
+                   |> List.sort ~compare:(Card.compare_at rank)),
+              level,
+              finished,
+              turn,
+              current ),
+          [] )
+  | Trading (hands, level, position, remaining), Sort ->
+      let rank = rank_of level in
+      Ok
+        ( Trading
+            ( hands
+              |> Player.set player
+                   (Player.get player hands
+                   |> List.sort ~compare:(Card.compare_at rank)),
+              level,
+              position,
+              remaining ),
+          [] )
+  | Trading (_, _, _, remaining), Trade _ when Player.get player remaining = 0
+    ->
       Error `Already_traded
   | Trading _, Revolt -> Error `Not_implemented (* TODO: implement *)
-  | Trading (hands, level, position, traded), Trade cards -> (
+  | Trading (hands, level, position, remaining), Trade card -> (
       let hand = Player.get player hands in
       let* () =
         let level = rank_of level in
         (* Ensure the correct quantity of cards are being traded,
            and ensure that slaves give their highest cards *)
-        match (Player.get player position, List.map cards ~f:Rankj.of_card) with
-        | Big_master, [ _; _ ] | Small_master, [ _ ] -> Ok ()
-        | Small_slave, ([ _ ] as offered) | Big_slave, ([ _; _ ] as offered) ->
-            let sort_rev l =
-              List.rev @@ List.sort l ~compare:(Rankj.compare_at level)
-            in
-            let rec compare2 xs ys =
-              match (xs, ys) with
-              | [], _ | _, [] -> []
-              | x :: xs, y :: ys -> Rankj.compare_at level x y :: compare2 xs ys
-            in
+        match (Player.get player position, Rankj.of_card card) with
+        | Big_master, _ | Small_master, _ -> Ok ()
+        | Small_slave, offered | Big_slave, offered ->
             if
               hand
               |> List.filter ~f:(Fn.non @@ Card.equal (R (level, Hearts)))
-              |> List.map ~f:Rankj.of_card |> sort_rev
-              |> compare2 (sort_rev offered)
-              |> List.for_all ~f:(fun x -> x >= 0)
+              |> List.map ~f:Rankj.of_card
+              |> List.max_elt ~compare:(Rankj.compare_at level)
+              |> Option.value_map ~default:true ~f:(fun high ->
+                     Rankj.compare_at level high offered <= 0)
             then Ok ()
             else Error `Must_give_highest_cards
-        | _ -> Error `Incorrent_number_of_cards
       in
 
       let receiver : Player.t =
@@ -92,21 +111,23 @@ let transition (state : t) (player : Player.t) (msg : message) :
         | Small_master -> Player.who_is Small_slave position
         | Small_slave -> Player.who_is Small_master position
       in
-      let* hand' = hand - cards in
+      let* hand' = hand -- [ card ] in
       let hands' =
         hands |> Player.set player hand'
-        |> Player.set receiver (Player.get receiver hands @ cards)
+        |> Player.set receiver (card :: Player.get receiver hands)
       in
-      match Player.set player true traded with
-      | Store (true, true, true, true) ->
+      match
+        Player.set player (Int.( - ) (Player.get player remaining) 1) remaining
+      with
+      | Store (0, 0, 0, 0) ->
           Ok
             ( Playing
                 (hands', level, No_one, Player.who_is Big_slave position, None),
-              [ `Trade (player, receiver, cards) ] )
+              [ `Trade (player, receiver, card) ] )
       | traded' ->
           Ok
             ( Trading (hands', level, position, traded'),
-              [ `Trade (player, receiver, cards) ] ))
+              [ `Trade (player, receiver, card) ] ))
   | Playing (_, _, _, turn, _), (Play _ | Pass)
     when not (Player.equal player turn) ->
       Error `Not_your_turn
@@ -117,17 +138,23 @@ let transition (state : t) (player : Player.t) (msg : message) :
         match Player.(get turn' hands |> List.is_empty, equal turn' leader) with
         | true, true ->
             let turn'' = Player.teammate turn' in
-            Playing (hands, level, finished, turn'', None)
+            let turn''' =
+              if Player.get turn'' hands |> List.is_empty then Player.next turn'
+              else turn''
+            in
+            Playing (hands, level, finished, turn''', None)
         | true, false -> next_state turn'
         | false, true -> Playing (hands, level, finished, turn', None)
         | false, false -> Playing (hands, level, finished, turn', current)
       in
 
       Ok (next_state turn, [ `Passed player ])
-  | Playing (hands, level, finished, turn, current), Play (score', cards') -> (
-      let* () =
-        if Score.verify (rank_of level) score' cards' then Ok ()
-        else Error `Wrong_score
+  | Playing (hands, level, finished, turn, current), Play (* score', *) cards'
+    -> (
+      let* score' =
+        match Score.infer (rank_of level) (* score', *) cards' with
+        | [] -> Error `Wrong_score
+        | sc :: _ -> Ok sc
       in
       let* () =
         match current with
@@ -135,7 +162,7 @@ let transition (state : t) (player : Player.t) (msg : message) :
             Error `Doesn't_beat
         | _ -> Ok ()
       in
-      let* hand' = Player.get player hands - cards' in
+      let* hand' = Player.get player hands -- cards' in
       let hands' = Player.set player hand' hands in
 
       let rec find_next (player : Player.t) : Player.t =
@@ -178,8 +205,9 @@ let transition (state : t) (player : Player.t) (msg : message) :
               init Big_slave |> set bm Big_master |> set sm Small_master
               |> set player Small_slave)
           in
+          let remaining' = Player.(init 2 |> set sm 1 |> set player 1) in
           Ok
-            ( Trading (deal_hands (), level', position', Player.init false),
+            ( Trading (deal_hands (), level', position', remaining'),
               [ `Played (player, score'); `New_round position' ] ))
   | Winner _, _
   | Trading _, Play _
@@ -187,3 +215,46 @@ let transition (state : t) (player : Player.t) (msg : message) :
   | Playing _, Revolt
   | Playing _, Trade _ ->
       Error `Wrong_phase
+
+let to_string : t -> string =
+  let pts : Player.position -> string = function
+    | Big_master -> "  Big master"
+    | Small_master -> "Small master"
+    | Small_slave -> "Small slave "
+    | Big_slave -> "  Big slave "
+  in
+  let cts (cards : Card.t list) =
+    String.concat ~sep:" " (List.map cards ~f:Card.to_string)
+  in
+  let lts : level -> string = function
+    | Level (r, _, AC) -> Printf.sprintf "%s (AC)" (Rank.to_string r)
+    | Level (_, r, BD) -> Printf.sprintf "%s (BD)" (Rank.to_string r)
+  in
+  let curts : (Player.t * Score.t) option -> string = function
+    | None -> "leads"
+    | Some (owner, score) ->
+        Printf.sprintf "to beat %s's %s" (Player.show owner) (Score.show score)
+  in
+  function
+  | Winner level -> Printf.sprintf "Winner: %s" (show_level level)
+  | Playing (Store (a, b, c, d), level, _, turn, current) ->
+      Printf.sprintf
+        "[Playing] Level: %s\nA | %s\nB |  %s\nC |  %s\nD |  %s\n%s %s"
+        (lts level) (cts a) (cts b) (cts c) (cts d) (Player.show turn)
+        (curts current)
+  | Trading (Store (a, b, c, d), level, position, remaining) ->
+      Printf.sprintf
+        "[Trading] Level: %s\n\
+         A | %s | %d |  %s\n\
+         B | %s | %d |  %s\n\
+         C | %s | %d |  %s\n\
+         D | %s | %d |  %s\n"
+        (lts level)
+        (Player.get A position |> pts)
+        (Player.get A remaining) (cts a)
+        (Player.get B position |> pts)
+        (Player.get B remaining) (cts b)
+        (Player.get C position |> pts)
+        (Player.get C remaining) (cts c)
+        (Player.get D position |> pts)
+        (Player.get D remaining) (cts d)

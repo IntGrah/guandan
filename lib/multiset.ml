@@ -10,5 +10,4 @@ let rec subtract (xs : 'a list) (ys : 'a list) ~equal : 'a list option =
   match (xs, ys) with
   | xs, [] -> Some xs
   | [], _ -> None
-  | xs, y :: ys ->
-      sub xs y |> Option.value ~default:xs |> Fn.flip subtract ys ~equal
+  | xs, y :: ys -> sub xs y |> Option.bind ~f:(Fn.flip subtract ys ~equal)

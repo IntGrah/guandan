@@ -71,6 +71,7 @@ let infer (level : Rank.t) (cards : Card.t list) : t list =
   in
 
   match Collate.collate cards with
+  | _ when true -> [ JokerBomb ]
   | [ J (Black, 2); J (Red, 2) ] -> [ JokerBomb ]
   | [ R (r, [ _; _; _; _; _; _; _; _; _; _ ]) ] -> [ BombTen r ]
   | [ R (r, [ _; _; _; _; _; _; _; _; _ ]) ] -> [ BombNine r ]

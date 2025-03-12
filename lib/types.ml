@@ -1,11 +1,5 @@
 open Base
 
-module type Comparable = sig
-  type t
-
-  val compare : t -> t -> int
-end
-
 module Joker = struct
   type t = Black | Red [@@deriving show, eq, ord]
 end
@@ -26,6 +20,21 @@ module Rank = struct
     | King
     | Ace
   [@@deriving show, eq, ord]
+
+  let to_string : t -> string = function
+    | Two -> "2"
+    | Three -> "3"
+    | Four -> "4"
+    | Five -> "5"
+    | Six -> "6"
+    | Seven -> "7"
+    | Eight -> "8"
+    | Nine -> "9"
+    | Ten -> "T"
+    | Jack -> "J"
+    | Queen -> "Q"
+    | King -> "K"
+    | Ace -> "A"
 
   let all : t list =
     [
@@ -87,6 +96,12 @@ end
 module Suit = struct
   type t = Diamonds | Clubs | Hearts | Spades [@@deriving show, eq, ord]
 
+  let to_string : t -> string = function
+    | Diamonds -> "♢"
+    | Clubs -> "♧"
+    | Hearts -> "♡"
+    | Spades -> "♤"
+
   let all : t list = [ Clubs; Hearts; Diamonds; Spades ]
 end
 
@@ -94,6 +109,11 @@ module Card = struct
   open Base
 
   type t = R of Rank.t * Suit.t | J of Joker.t [@@deriving show, eq, ord]
+
+  let to_string : t -> string = function
+    | R (r, s) -> Rank.to_string r ^ Suit.to_string s
+    | J Red -> "BJ"
+    | J Black -> "SJ"
 
   let all : t list =
     J Red :: J Black

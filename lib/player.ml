@@ -12,6 +12,8 @@ type 'a store = Store of 'a * 'a * 'a * 'a [@@deriving show]
 let get (p : t) (Store (a, b, c, d) : 'a store) : 'a =
   match p with A -> a | B -> b | C -> c | D -> d
 
+let init (x : 'a) : 'a store = Store (x, x, x, x)
+
 let set (player : t) (x : 'a) (Store (a, b, c, d) : 'a store) : 'a store =
   match player with
   | A -> Store (x, b, c, d)
